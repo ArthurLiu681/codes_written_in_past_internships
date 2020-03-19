@@ -1,0 +1,358 @@
+---
+title: "Energia Multiple Regression Model"
+author: "Arthur Liu"
+date: "3/14/2020"
+output: html_document
+---
+
+                                                            
+```{r setup, include=FALSE}
+library(reticulate)
+knitr::opts_chunk$set(python.reticulate = FALSE)
+use_python("C:\\Users\\admin\\AppData\\Local\\Programs\\Python\\Python38-32\\python.exe")
+```
+
+
+## 1. Calculate factors and store the data in a .csv file
+
+```{python engine.path="C:\\Users\\admin\\AppData\\Local\\Programs\\Python\\Python38-32\\python.exe"}
+import pandas
+import matplotlib.pyplot as plt
+import numpy
+from sklearn import linear_model
+
+# read data files
+
+wind_info = pandas.read_excel(".\\Data - Part 1.xlsx", sheet_name="Wind") \
+    .set_index(["Start Date", "Start Time 30 Minute Period"]).fillna(value=0)
+demand_info = pandas.read_excel(".\\Data - Part 1.xlsx", sheet_name="Demand") \
+    .set_index(["Start Date", "Start Time 30 Minute Period"]).fillna(value=0)
+price_info = pandas.read_excel(".\\Data - Part 1.xlsx", sheet_name="Actual Prices") \
+    .set_index(["Start Date", "Time"]).fillna(value=0)
+
+# calculate factors and dependents
+
+# actual price growth rate dependent
+actual_price_growth_DAM_raw = (price_info["DA Price"].diff().iloc[1:]) / (price_info["DA Price"].iloc[1:])
+actual_price_growth_DAM = actual_price_growth_DAM_raw.iloc[2:]
+actual_price_growth_IDA1_raw = (price_info["IDA1 Price"].diff().iloc[1:]) / (price_info["IDA1 Price"].iloc[1:])
+actual_price_growth_IDA1 = actual_price_growth_IDA1_raw.iloc[2:]
+actual_price_growth_IDA2_raw = (price_info["IDA2 Price"].diff().iloc[1:]) / (price_info["IDA2 Price"].iloc[1:])
+actual_price_growth_IDA2 = actual_price_growth_IDA2_raw.iloc[2:]
+actual_price_growth_IDA3_raw = (price_info["IDA3 Price"].diff().iloc[1:]) / (price_info["IDA3 Price"].iloc[1:])
+actual_price_growth_IDA3 = actual_price_growth_IDA3_raw.iloc[2:]
+actual_price_growth_BM_raw = (price_info["BM Price"].diff().iloc[1:]) / (price_info["BM Price"].iloc[1:])
+actual_price_growth_BM = actual_price_growth_BM_raw.iloc[2:]
+
+# previous actual price growth rate factor
+price_frame = price_info[["DA Price", "IDA1 Price", "IDA2 Price", "IDA3 Price", "BM Price"]]
+average_price = pandas.Series([numpy.mean([price for price in list(price_frame.iloc[i]) if price != 0]) for i in range(len(price_frame.index))], index=price_frame.index)
+pre_price_growth = ((average_price.diff().iloc[1:]) / (average_price.iloc[1:])).shift(periods=1).iloc[2:]
+
+# forecast error change rate factor
+wind_info["average_wind_forecasts"] = [numpy.mean([forecast for forecast in list(wind_info.iloc[i])[-4:] if forecast != 0]) for i in range(len(wind_info.index))]
+wind_info["wind_forecast_error"] = list(wind_info["Actual Wind (MW)"] - wind_info["average_wind_forecasts"])
+
+demand_info["average_demand_forecasts"] = [numpy.mean([forecast for forecast in list(demand_info.iloc[i])[-4:] if forecast != 0]) for i in range(len(demand_info.index))]
+demand_info["demand_forecast_error"] = list(demand_info["Actual Demand (MW)"] - wind_info["average_wind_forecasts"])
+
+demand_info["net_demand_forecast_error"] = demand_info["demand_forecast_error"] - wind_info["wind_forecast_error"]
+demand_info["demand_forecast_error_change"] = \
+    demand_info["demand_forecast_error"].diff() / demand_info["demand_forecast_error"]
+
+forecast_error_change_factor = demand_info["demand_forecast_error_change"].shift().iloc[3:]
+
+# actual demand growth rate factor
+actual_net_demand = demand_info["Actual Demand (MW)"] - wind_info["Actual Wind (MW)"]
+net_demand_growth_factor = (actual_net_demand.diff().iloc[1:] / actual_net_demand.iloc[1:]).iloc[2:]
+factors_frame = pandas.DataFrame({"pre_price_growth": pre_price_growth,
+                                  "forecast_error_change": forecast_error_change_factor,
+                                  "net_demand_growth": net_demand_growth_factor,
+                                  "actual_price_growth_DAM": actual_price_growth_DAM,
+                                  "actual_price_growth_IDA1": actual_price_growth_IDA1,
+                                  "actual_price_growth_IDA2": actual_price_growth_IDA2,
+                                  "actual_price_growth_IDA3": actual_price_growth_IDA3,
+                                  "actual_price_growth_BM": actual_price_growth_BM},
+                                 index=net_demand_growth_factor.index)
+factors_frame.reset_index(level=["Start Date", "Start Time 30 Minute Period"]).to_csv(".\\factors.csv", index=False)
+```
+
+## 2. Build models for markets with different auction period
+models for different markets utilizes data of different time period, so have to be built separately in different sessions
+
+### 2.1. Regression model for DAM, IDA1, and BM
+
+#### 2.1.1. Eda
+
+```{r, fig.fullwidth=TRUE}
+library(ggplot2)
+library(reticulate)
+pandas <- import("pandas", convert=FALSE)
+py_run_string("factors_frame = r.pandas.read_csv('./factors.csv').set_index(['Start Date', 'Start Time 30 Minute Period'])")
+py_run_string("factors_frame = factors_frame[['pre_price_growth', 'forecast_error_change', 'net_demand_growth', 'actual_price_growth_DAM', 'actual_price_growth_IDA1', 'actual_price_growth_BM']]")
+py_run_string("useless_data = ['nan', 'inf', '-inf']")
+py_run_string("factors_frame = factors_frame.iloc[[i for i in range(len(factors_frame.index)) if 'nan' not in list(map(lambda x: str(x), factors_frame.iloc[i])) and 'inf' not in list(map(lambda x: str(x), factors_frame.iloc[i])) and '-inf' not in list(map(lambda x: str(x), factors_frame.iloc[i])) and not [element for element in list(factors_frame.iloc[i]) if isinstance(element, float) and abs(element) > 5]]]")
+py_run_string("dates = [index[0] for index in list(factors_frame.index)]")
+py_run_string("times = [index[1] for index in list(factors_frame.index)]")
+py_run_string("xaxis = [dates[i] + times[i] for i in range(len(dates))]")
+py_run_string("factors_frame['time'] = xaxis")
+py_run_string("ticks = [xaxis[i] for i in range(len(xaxis)) if i % 52 == 0]")
+py$factors_frame$time <- strptime(py$factors_frame$time, "%d/%m/%Y%H:%M:%S")
+ggplot(py$factors_frame, aes(x=time, y=pre_price_growth)) + geom_line(color="blue", show.legend = TRUE) + geom_line(aes(y=forecast_error_change),color="red", show.legend = TRUE) + geom_line(aes(y=net_demand_growth),color="yellow", show.legend = TRUE) + geom_line(aes(y=actual_price_growth_DAM),color="black", show.legend = TRUE) + geom_line(aes(y=actual_price_growth_IDA1),color="green", show.legend = TRUE) + geom_line(aes(y=actual_price_growth_BM),color="grey", show.legend = TRUE)+labs(y="factors")+theme(legend.position=c(0.8, 0.8))
+```
+&nbsp;
+In the above picture, the blue line denote growth rate in previous period, the red line denotes change rate of change rate of forecast error, the yellow line denotes the net demand growth rate, and the black, green, and greay ones denote the actual price growth rate in the three markets respectively. For the chart to be visualized in a way with more apparent pattern, extreme values with absolute value greater than 5 are abandoned before showing the chart.
+
+#### 2.1.2. Forward stepwise regression
+
+```{python engine.path="C:\\Users\\admin\\AppData\\Local\\Programs\\Python\\Python38-32\\python.exe"}
+import pandas
+import matplotlib.pyplot as plt
+import numpy
+from sklearn import linear_model
+
+factors_frame = pandas.read_csv(".\\factors.csv").set_index(["Start Date", "Start Time 30 Minute Period"])
+pre_price_growth = factors_frame["pre_price_growth"]
+forecast_error_change_factor = factors_frame["forecast_error_change"]
+net_demand_growth_factor = factors_frame["net_demand_growth"]
+actual_price_growth_DAM = factors_frame["actual_price_growth_DAM"]
+actual_price_growth_IDA1 = factors_frame["actual_price_growth_IDA1"]
+actual_price_growth_BM = factors_frame["actual_price_growth_BM"]
+
+# separate train data and test data
+pre_price_train = [list(pre_price_growth)[i] for i in range(len(pre_price_growth)) if i % 3 != 0]
+pre_price_test = [list(pre_price_growth)[i] for i in range(len(pre_price_growth)) if i % 3 == 0]
+forecast_error_train = [list(forecast_error_change_factor)[i] for i in range(len(forecast_error_change_factor))
+                        if i % 3 != 0]
+forecast_error_test = [list(forecast_error_change_factor)[i] for i in range(len(forecast_error_change_factor))
+                       if i % 3 == 0]
+net_demand_train = [list(net_demand_growth_factor)[i] for i in range(len(net_demand_growth_factor)) if i % 3 != 0]
+net_demand_test = [list(net_demand_growth_factor)[i] for i in range(len(net_demand_growth_factor)) if i % 3 == 0]
+price_dam_train = [list(actual_price_growth_DAM)[i] for i in range(len(actual_price_growth_DAM)) if i % 3 != 0]
+price_dam_test = [list(actual_price_growth_DAM)[i] for i in range(len(actual_price_growth_DAM)) if i % 3 == 0]
+price_ida1_train = [list(actual_price_growth_IDA1)[i] for i in range(len(actual_price_growth_IDA1)) if i % 3 != 0]
+price_ida1_test = [list(actual_price_growth_IDA1)[i] for i in range(len(actual_price_growth_IDA1)) if i % 3 == 0]
+price_BM_train = [list(actual_price_growth_BM)[i] for i in range(len(actual_price_growth_BM)) if i % 3 != 0]
+price_BM_test = [list(actual_price_growth_BM)[i] for i in range(len(actual_price_growth_BM)) if i % 3 == 0]
+
+# reiterate factors
+factors_train = [pre_price_train, forecast_error_train, net_demand_train]
+factors_test = [pre_price_test, forecast_error_test, net_demand_test]
+factors_in_use_train = []
+factors_in_use_test = []
+dependents_train = [price_dam_train, price_ida1_train, price_BM_train]
+dependents_test = [price_dam_test, price_ida1_test, price_BM_test]
+markets = ["DAM", "IDA1", "BM"]
+for i in range(len(factors_train)):
+    factors_in_use_train.append(factors_train[i])
+    factors_in_use_test.append(factors_test[i])
+    for j in range(len(dependents_train)):
+        xTrain = numpy.array(factors_in_use_train)
+        yTrain = numpy.array([dependents_train[j]])
+        # delete "nan" and "inf" in data sets
+        deleted_index = [i for i in range(len(yTrain[0])) if str(yTrain[0][i]) in ["inf", "-inf", "nan"]]
+        deleted_index_x = [[i for i in range(len(xtrain)) if str(xtrain[i]) in ["inf", "-inf", "nan"]]
+                            for xtrain in xTrain]
+        deleted_index = deleted_index + [index for indexes in deleted_index_x for index in indexes]
+        xTrain = pandas.DataFrame(
+            [[xtrain[i] for i in range(len(xtrain)) if i not in deleted_index] for xtrain in xTrain]).T.values
+        yTrain = [[yTrain[0][i] for i in range(len(yTrain[0])) if i not in deleted_index]][0]
+        xTest = numpy.array(factors_in_use_test)
+        yTest = numpy.array([dependents_test[j]])
+        deleted_index = [i for i in range(len(yTest[0])) if str(yTest[0][i]) in ["inf", "-inf", "nan"]]
+        deleted_index_x = [[i for i in range(len(xtest)) if str(xtest[i]) in ["inf", "-inf", "nan"]]
+                           for xtest in xTest]
+        deleted_index = deleted_index + [index for indexes in deleted_index_x for index in indexes]
+        xTest = pandas.DataFrame(
+            [[xtest[i] for i in range(len(xtest)) if i not in deleted_index] for xtest in xTest]).T.values
+        yTest = [[yTest[0][i] for i in range(len(yTest[0])) if i not in deleted_index]][0]
+        Energia_model = linear_model.LinearRegression()
+        Energia_model.fit(xTrain, yTrain)
+        print("regression model with ", len(factors_in_use_train), " factors for ", markets[j])
+        print("coefficients:", Energia_model.coef_)
+        print("intercept:", Energia_model.intercept_)
+        SSR = numpy.linalg.norm([yTest[i] - Energia_model.predict(xTest)[i] for i in range(len(yTest))], 2)
+        print("SSR:", SSR)
+        print("\n")
+```
+
+### 2.2 Regression model for IDA2
+
+#### 2.2.1. Eda
+
+```{r, fig.fullwidth=TRUE}
+library(ggplot2)
+library(reticulate)
+pandas <- import("pandas", convert=FALSE)
+py_run_string("factors_frame = r.pandas.read_csv('./factors.csv').set_index(['Start Date', 'Start Time 30 Minute Period'])")
+py_run_string("factors_frame = factors_frame.iloc[[i for i in range(len(factors_frame.index)) if '11:00:00' <= factors_frame.index[i][1] < '24:00:00']]")
+py_run_string("factors_frame = factors_frame[['pre_price_growth', 'forecast_error_change', 'net_demand_growth', 'actual_price_growth_IDA2']]")
+py_run_string("useless_data = ['nan', 'inf', '-inf']")
+py_run_string("factors_frame = factors_frame.iloc[[i for i in range(len(factors_frame.index)) if 'nan' not in list(map(lambda x: str(x), factors_frame.iloc[i])) and 'inf' not in list(map(lambda x: str(x), factors_frame.iloc[i])) and '-inf' not in list(map(lambda x: str(x), factors_frame.iloc[i])) and not [element for element in list(factors_frame.iloc[i]) if isinstance(element, float) and abs(element) > 5]]]")
+py_run_string("dates = [index[0] for index in list(factors_frame.index)]")
+py_run_string("times = [index[1] for index in list(factors_frame.index)]")
+py_run_string("xaxis = [dates[i] + times[i] for i in range(len(dates))]")
+py_run_string("factors_frame['time'] = xaxis")
+py_run_string("ticks = [xaxis[i] for i in range(len(xaxis)) if i % 26 == 0]")
+py$factors_frame$time <- strptime(py$factors_frame$time, "%d/%m/%Y%H:%M:%S")
+ggplot(py$factors_frame, aes(x=time, y=pre_price_growth)) + geom_line(color="blue", show.legend = TRUE) + geom_line(aes(y=forecast_error_change),color="red", show.legend = TRUE) + geom_line(aes(y=net_demand_growth),color="yellow", show.legend = TRUE) + geom_line(aes(y=actual_price_growth_IDA2),color="green", show.legend = TRUE) + labs(y="factors")
+```
+&nbsp;
+In the above picture, the blue line denote growth rate in previous period, the red line denotes change rate of change rate of forecast error, the yellow line denotes the net demand growth rate, and the green ones denote the actual price growth rate in IDA2 market. For the chart to be visualized in a way with more apparent pattern, extreme values with absolute value greater than 5 are abandoned before showing the chart.
+
+#### 2.2.2. Forward stepwise regression
+
+```{python engine.path="C:\\Users\\admin\\AppData\\Local\\Programs\\Python\\Python38-32\\python.exe"}
+import pandas
+import matplotlib.pyplot as plt
+import numpy
+from sklearn import linear_model
+
+factors_frame = pandas.read_csv(".\\factors.csv").set_index(["Start Date", "Start Time 30 Minute Period"])
+factors_frame = factors_frame.iloc[[i for i in range(len(factors_frame.index)) if '11:00:00' <= factors_frame.index[i][1] < '24:00:00']]
+pre_price_growth = factors_frame["pre_price_growth"]
+forecast_error_change_factor = factors_frame["forecast_error_change"]
+net_demand_growth_factor = factors_frame["net_demand_growth"]
+actual_price_growth_IDA2 = factors_frame["actual_price_growth_IDA2"]
+
+# separate train data and test data
+pre_price_train = [list(pre_price_growth)[i] for i in range(len(pre_price_growth)) if i % 3 != 0]
+pre_price_test = [list(pre_price_growth)[i] for i in range(len(pre_price_growth)) if i % 3 == 0]
+forecast_error_train = [list(forecast_error_change_factor)[i] for i in range(len(forecast_error_change_factor))
+                        if i % 3 != 0]
+forecast_error_test = [list(forecast_error_change_factor)[i] for i in range(len(forecast_error_change_factor))
+                       if i % 3 == 0]
+net_demand_train = [list(net_demand_growth_factor)[i] for i in range(len(net_demand_growth_factor)) if i % 3 != 0]
+net_demand_test = [list(net_demand_growth_factor)[i] for i in range(len(net_demand_growth_factor)) if i % 3 == 0]
+price_ida2_train = [list(actual_price_growth_IDA2)[i] for i in range(len(actual_price_growth_IDA2)) if i % 3 != 0]
+price_ida2_test = [list(actual_price_growth_IDA2)[i] for i in range(len(actual_price_growth_IDA2)) if i % 3 == 0]
+
+# reiterate factors
+factors_train = [pre_price_train, forecast_error_train, net_demand_train]
+factors_test = [pre_price_test, forecast_error_test, net_demand_test]
+factors_in_use_train = []
+factors_in_use_test = []
+dependents_train = [price_ida2_train]
+dependents_test = [price_ida2_test]
+for i in range(len(factors_train)):
+    factors_in_use_train.append(factors_train[i])
+    factors_in_use_test.append(factors_test[i])
+    for j in range(len(dependents_train)):
+        xTrain = numpy.array(factors_in_use_train)
+        yTrain = numpy.array([dependents_train[j]])
+        # delete "nan" and "inf" in data sets
+        deleted_index = [i for i in range(len(yTrain[0])) if str(yTrain[0][i]) in ["inf", "-inf", "nan"]]
+        deleted_index_x = [[i for i in range(len(xtrain)) if str(xtrain[i]) in ["inf", "-inf", "nan"]]
+                            for xtrain in xTrain]
+        deleted_index = deleted_index + [index for indexes in deleted_index_x for index in indexes]
+        xTrain = pandas.DataFrame(
+            [[xtrain[i] for i in range(len(xtrain)) if i not in deleted_index] for xtrain in xTrain]).T.values
+        yTrain = [[yTrain[0][i] for i in range(len(yTrain[0])) if i not in deleted_index]][0]
+        xTest = numpy.array(factors_in_use_test)
+        yTest = numpy.array([dependents_test[j]])
+        deleted_index = [i for i in range(len(yTest[0])) if str(yTest[0][i]) in ["inf", "-inf", "nan"]]
+        deleted_index_x = [[i for i in range(len(xtest)) if str(xtest[i]) in ["inf", "-inf", "nan"]]
+                           for xtest in xTest]
+        deleted_index = deleted_index + [index for indexes in deleted_index_x for index in indexes]
+        xTest = pandas.DataFrame(
+            [[xtest[i] for i in range(len(xtest)) if i not in deleted_index] for xtest in xTest]).T.values
+        yTest = [[yTest[0][i] for i in range(len(yTest[0])) if i not in deleted_index]][0]
+        Energia_model = linear_model.LinearRegression()
+        Energia_model.fit(xTrain, yTrain)
+        print("regression model with ", len(factors_in_use_train), " factors for IDA2")
+        print("coefficients:", Energia_model.coef_)
+        print("intercept:", Energia_model.intercept_)
+        SSR = numpy.linalg.norm([yTest[i] - Energia_model.predict(xTest)[i] for i in range(len(yTest))], 2)
+        print("SSR:", SSR)
+        print("\n")
+```
+
+## 2.3. Regression model for IDA3
+
+#### 2.3.1. Eda
+
+```{r, fig.fullwidth=TRUE}
+library(ggplot2)
+library(reticulate)
+pandas <- import("pandas", convert=FALSE)
+py_run_string("factors_frame = r.pandas.read_csv('./factors.csv').set_index(['Start Date', 'Start Time 30 Minute Period'])")
+py_run_string("factors_frame = factors_frame[['pre_price_growth', 'forecast_error_change', 'net_demand_growth', 'actual_price_growth_IDA3']]")
+py_run_string("factors_frame = factors_frame.iloc[[i for i in range(len(factors_frame.index)) if '17:00:00' <= factors_frame.index[i][1] < '23:00:00']]")
+py_run_string("useless_data = ['nan', 'inf', '-inf']")
+py_run_string("factors_frame = factors_frame.iloc[[i for i in range(len(factors_frame.index)) if 'nan' not in list(map(lambda x: str(x), factors_frame.iloc[i])) and 'inf' not in list(map(lambda x: str(x), factors_frame.iloc[i])) and '-inf' not in list(map(lambda x: str(x), factors_frame.iloc[i])) and not [element for element in list(factors_frame.iloc[i]) if isinstance(element, float) and abs(element) > 5]]]")
+py_run_string("dates = [index[0] for index in list(factors_frame.index)]")
+py_run_string("times = [index[1] for index in list(factors_frame.index)]")
+py_run_string("xaxis = [dates[i] + times[i] for i in range(len(dates))]")
+py_run_string("factors_frame['time'] = xaxis")
+py$factors_frame$time <- strptime(py$factors_frame$time, "%d/%m/%Y%H:%M:%S")
+ggplot(py$factors_frame, aes(x=time, y=pre_price_growth)) + geom_line(color="blue", show.legend = TRUE) + geom_line(aes(y=forecast_error_change),color="red", show.legend = TRUE) + geom_line(aes(y=net_demand_growth),color="yellow", show.legend = TRUE) + geom_line(aes(y=actual_price_growth_IDA3),color="green", show.legend = TRUE) + labs(y="factors")
+```
+&nbsp;
+In the above picture, the blue line denote growth rate in previous period, the red line denotes change rate of change rate of forecast error, the yellow line denotes the net demand growth rate, and the green ones denote the actual price growth rate in IDA3 market. For the chart to be visualized in a way with more apparent pattern, extreme values with absolute value greater than 5 are abandoned before showing the chart.
+
+#### 2.3.2. Forward stepwise regression
+
+```{python engine.path="C:\\Users\\admin\\AppData\\Local\\Programs\\Python\\Python38-32\\python.exe", fig.fullwidth=TRUE}
+import pandas
+import matplotlib.pyplot as plt
+import numpy
+from sklearn import linear_model
+
+factors_frame = pandas.read_csv(".\\factors.csv").set_index(["Start Date", "Start Time 30 Minute Period"])
+factors_frame = factors_frame.iloc[[i for i in range(len(factors_frame.index)) if '17:00:00' <= factors_frame.index[i][1] < '23:00:00']]
+pre_price_growth = factors_frame["pre_price_growth"]
+forecast_error_change_factor = factors_frame["forecast_error_change"]
+net_demand_growth_factor = factors_frame["net_demand_growth"]
+actual_price_growth_IDA3 = factors_frame["actual_price_growth_IDA3"]
+
+# separate train data and test data
+pre_price_train = [list(pre_price_growth)[i] for i in range(len(pre_price_growth)) if i % 3 != 0]
+pre_price_test = [list(pre_price_growth)[i] for i in range(len(pre_price_growth)) if i % 3 == 0]
+forecast_error_train = [list(forecast_error_change_factor)[i] for i in range(len(forecast_error_change_factor))
+                        if i % 3 != 0]
+forecast_error_test = [list(forecast_error_change_factor)[i] for i in range(len(forecast_error_change_factor))
+                       if i % 3 == 0]
+net_demand_train = [list(net_demand_growth_factor)[i] for i in range(len(net_demand_growth_factor)) if i % 3 != 0]
+net_demand_test = [list(net_demand_growth_factor)[i] for i in range(len(net_demand_growth_factor)) if i % 3 == 0]
+price_ida3_train = [list(actual_price_growth_IDA3)[i] for i in range(len(actual_price_growth_IDA3)) if i % 3 != 0]
+price_ida3_test = [list(actual_price_growth_IDA3)[i] for i in range(len(actual_price_growth_IDA3)) if i % 3 == 0]
+
+# reiterate factors
+factors_train = [pre_price_train, forecast_error_train, net_demand_train]
+factors_test = [pre_price_test, forecast_error_test, net_demand_test]
+factors_in_use_train = []
+factors_in_use_test = []
+dependents_train = [price_ida3_train]
+dependents_test = [price_ida3_test]
+for i in range(len(factors_train)):
+    factors_in_use_train.append(factors_train[i])
+    factors_in_use_test.append(factors_test[i])
+    for j in range(len(dependents_train)):
+        xTrain = numpy.array(factors_in_use_train)
+        yTrain = numpy.array([dependents_train[j]])
+        # delete "nan" and "inf" in data sets
+        deleted_index = [i for i in range(len(yTrain[0])) if str(yTrain[0][i]) in ["inf", "-inf", "nan"]]
+        deleted_index_x = [[i for i in range(len(xtrain)) if str(xtrain[i]) in ["inf", "-inf", "nan"]]
+                            for xtrain in xTrain]
+        deleted_index = deleted_index + [index for indexes in deleted_index_x for index in indexes]
+        xTrain = pandas.DataFrame(
+            [[xtrain[i] for i in range(len(xtrain)) if i not in deleted_index] for xtrain in xTrain]).T.values
+        yTrain = [[yTrain[0][i] for i in range(len(yTrain[0])) if i not in deleted_index]][0]
+        xTest = numpy.array(factors_in_use_test)
+        yTest = numpy.array([dependents_test[j]])
+        deleted_index = [i for i in range(len(yTest[0])) if str(yTest[0][i]) in ["inf", "-inf", "nan"]]
+        deleted_index_x = [[i for i in range(len(xtest)) if str(xtest[i]) in ["inf", "-inf", "nan"]]
+                           for xtest in xTest]
+        deleted_index = deleted_index + [index for indexes in deleted_index_x for index in indexes]
+        xTest = pandas.DataFrame(
+            [[xtest[i] for i in range(len(xtest)) if i not in deleted_index] for xtest in xTest]).T.values
+        yTest = [[yTest[0][i] for i in range(len(yTest[0])) if i not in deleted_index]][0]
+        Energia_model = linear_model.LinearRegression()
+        Energia_model.fit(xTrain, yTrain)
+        print("regression model with ", len(factors_in_use_train), " factors for IDA3")
+        print("coefficients:", Energia_model.coef_)
+        print("intercept:", Energia_model.intercept_)
+        SSR = numpy.linalg.norm([yTest[i] - Energia_model.predict(xTest)[i] for i in range(len(yTest))], 2)
+        print("SSR:", SSR)
+        print("\n")
+```
