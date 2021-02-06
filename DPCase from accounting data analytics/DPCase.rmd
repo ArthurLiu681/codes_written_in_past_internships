@@ -1,0 +1,115 @@
+---
+output:
+  html_document: default
+  pdf_document: default
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+### Questions about individual companies
+```{r}
+data = read.csv("C:\\Users\\admin\\Downloads\\CaseDPCombined.csv")
+
+data2015 = data[data$Year=="2015", c("Ticker", "Name", "Year", "Industry", "Net.Income", "Net.Revenues", "Total.Assets", "Total.Shareholder.Equity")]
+data2014 = data[data$Year=="2014", c("Ticker", "Name", "Year", "Industry", "Net.Income", "Net.Revenues", "Total.Assets", "Total.Shareholder.Equity")]
+data2013 = data[data$Year=="2013", c("Ticker", "Name", "Year", "Industry", "Net.Income", "Net.Revenues", "Total.Assets", "Total.Shareholder.Equity")]
+
+data2015_combined = merge(data2015, data2014[c("Ticker", "Total.Assets", "Total.Shareholder.Equity")], by="Ticker", suffixes=c(".ending", ".beginning"))
+data2014_combined = merge(data2014, data2013[c("Ticker", "Total.Assets", "Total.Shareholder.Equity")], by="Ticker", suffixes=c(".ending", ".beginning"))
+
+data2015_combined$average_assets = (data2015_combined$Total.Assets.ending + data2015_combined$Total.Assets.beginning) / 2
+data2015_combined$average_equity = (data2015_combined$Total.Shareholder.Equity.ending + data2015_combined$Total.Shareholder.Equity.beginning) / 2
+data2015_combined$profit_margin = data2015_combined$Net.Income / data2015_combined$Net.Revenues
+data2015_combined$asset_turnover_ratio = data2015_combined$Net.Revenues / data2015_combined$average_assets
+data2015_combined$financial_leverage = data2015_combined$average_assets / data2015_combined$average_equity
+data2015_combined$return_on_equity = data2015_combined$Net.Income / data2015_combined$average_equity
+
+data2014_combined$average_assets = (data2014_combined$Total.Assets.ending + data2014_combined$Total.Assets.beginning) / 2
+data2014_combined$average_equity = (data2014_combined$Total.Shareholder.Equity.ending + data2014_combined$Total.Shareholder.Equity.beginning) / 2
+data2014_combined$profit_margin = data2014_combined$Net.Income / data2014_combined$Net.Revenues
+data2014_combined$asset_turnover_ratio = data2014_combined$Net.Revenues / data2014_combined$average_assets
+data2014_combined$financial_leverage = data2014_combined$average_assets / data2014_combined$average_equity
+data2014_combined$return_on_equity = data2014_combined$Net.Income / data2014_combined$average_equity
+```
+## Q4
+```{r}
+negative_profit_margin2015 = data2015_combined[data2015_combined$profit_margin<0, c("Name", "profit_margin", "asset_turnover_ratio")]
+negative_profit_margin2015 = negative_profit_margin2015[order(negative_profit_margin2015$asset_turnover_ratio, decreasing=TRUE), 
+                                                        colnames(negative_profit_margin2015)][1:10,]
+y = t(as.matrix(negative_profit_margin2015[c("profit_margin", "asset_turnover_ratio")]))
+x = barplot(y, 
+        beside = TRUE,
+        legend.text = TRUE,
+        ylim = c(0, 3.5),
+        main = "Top 10 companies accelerating into a brick wall",
+        las=2,
+        cex.names=0.4,
+        names.arg=negative_profit_margin2015$Name)
+text(x, pmax(y, 0)+0.2, labels=as.character(round(y, 2)), cex=0.5)
+```
+
+As shown in the above graph, among companies with negative profit margins, Staffing 360 Solutions Inc, Cosi Inc., Tel-Instrument Electronics Corp. have the highest asset turnover ratio. 
+
+## Q5
+```{r}
+ratio_data1415 = merge(data2015_combined[c("Ticker", "Name", "Year", "Industry", "profit_margin", "asset_turnover_ratio", "financial_leverage", "return_on_equity")], 
+                       data2014_combined[c("Ticker", "profit_margin", "asset_turnover_ratio", "financial_leverage", "return_on_equity")], 
+                       by="Ticker", suffixes=c(".2015", ".2014"))
+ratio_data1415_capital_goods = ratio_data1415[ratio_data1415["Industry"] == "Capital Goods", colnames(ratio_data1415)]
+
+ratio_data1415_capital_goods$percentage_change_in_profit_margin = ratio_data1415_capital_goods$profit_margin.2015 / 
+  ratio_data1415_capital_goods$profit_margin.2014 - 1
+ratio_data1415_capital_goods$percentage_change_in_asset_turnover_ratio = ratio_data1415_capital_goods$asset_turnover_ratio.2015 / 
+  ratio_data1415_capital_goods$asset_turnover_ratio.2014 - 1
+ratio_data1415_capital_goods$percentage_change_in_financial_leverage = ratio_data1415_capital_goods$financial_leverage.2015 /   
+  ratio_data1415_capital_goods$financial_leverage.2014 - 1
+ratio_data1415_capital_goods$percentage_change_in_return_on_equity = ratio_data1415_capital_goods$return_on_equity.2015 / 
+  ratio_data1415_capital_goods$return_on_equity.2014 - 1
+
+ratio_data1415_capital_goods$industry_median_profit_margin_change = median(ratio_data1415_capital_goods$percentage_change_in_profit_margin)
+ratio_data1415_capital_goods$industry_median_asset_turnover_ratio_change = median(ratio_data1415_capital_goods$percentage_change_in_asset_turnover_ratio)
+ratio_data1415_capital_goods$industry_median_financial_leverage_change = median(ratio_data1415_capital_goods$percentage_change_in_financial_leverage)
+ratio_data1415_capital_goods$industry_median_return_on_equity_change = median(ratio_data1415_capital_goods$percentage_change_in_return_on_equity)
+```
+
+```{r}
+selected_company_data = ratio_data1415_capital_goods[ratio_data1415_capital_goods$Name %in% 
+                                                       c("Ford Motor Company", "General Motors Company", "Taser International Inc."),
+                                                     colnames(ratio_data1415_capital_goods)]
+
+par(mfrow=c(2,2))
+
+x1 = barplot(selected_company_data$percentage_change_in_profit_margin, names.arg=selected_company_data$Name, 
+        main="Change in profit margin", cex.names=0.4, ylim=c(0,1.7))
+y1 = t(as.vector(selected_company_data$percentage_change_in_profit_margin))
+abline(h=selected_company_data$industry_median_profit_margin_change[1], lty=3)
+text(x1, pmax(y1, 0)+0.1, labels=as.character(round(y1, 2)), cex=0.5)
+legend(x="topright", legend=paste("Industry median", round(selected_company_data$industry_median_profit_margin_change[1], 2)), lty=3, 
+       pt.cex = 1, cex=0.4)
+
+x2 = barplot(selected_company_data$percentage_change_in_asset_turnover_ratio, names.arg=selected_company_data$Name,
+        main="Change in asset turnover ratio", cex.names=0.4, ylim=c(-0.11,0))
+y2 = t(as.vector(selected_company_data$percentage_change_in_asset_turnover_ratio))
+abline(h=selected_company_data$industry_median_asset_turnover_ratio_change[1], lty=3)
+text(x2, y2-0.005, labels=as.character(round(y2, 2)), cex=0.5)
+legend(x="bottomright", legend=paste("Industry median", round(selected_company_data$industry_median_asset_turnover_ratio_change[1], 2)), 
+       lty=3, pt.cex = 1, cex=0.4)
+
+x3 = barplot(selected_company_data$percentage_change_in_financial_leverage, names.arg=selected_company_data$Name,
+        main="Change in financial leverage", cex.names=0.4, ylim=c(0,0.14))
+y3 = t(as.vector(selected_company_data$percentage_change_in_financial_leverage))
+abline(h=selected_company_data$industry_median_financial_leverage_change[1], lty=3)
+text(x3, pmax(y3, 0)+0.01, labels=as.character(round(y3, 2)), cex=0.5)
+legend(x="topright", legend=paste("Industry median", round(selected_company_data$industry_median_financial_leverage_change[1], 2)), 
+       lty=3, pt.cex = 1, cex=0.4)
+
+x4 = barplot(selected_company_data$percentage_change_in_return_on_equity, names.arg=selected_company_data$Name, 
+        main="Change in return on equity", cex.names=0.4, ylim=c(-0.07,1.8))
+y4 = t(as.vector(selected_company_data$percentage_change_in_return_on_equity))
+abline(h=selected_company_data$industry_median_return_on_equity_change[1], lty=3)
+text(x4, pmax(y4, 0)+0.1, labels=as.character(round(y4, 2)), cex=0.5)
+legend(x="topright", legend=paste("Industry median", round(selected_company_data$industry_median_return_on_equity_change[1], 2)), 
+       lty=3, pt.cex = 1, cex=0.4)
+```
+
+The three companies chosen for analysis are Ford Motor Company, General Motors Company, and Taser International Inc from capital goods industry. Their ratios as compared with industry average are depicted in the graph above. As we can see, General Motors Company saw the largest increase in return on equity from 2014 to 2015, driven by rise in profit margin and financial leverage, both of which are significantly larger than industry average. On the other hand, Taser International Inc recorded a decrease in return on equity due to decline in profit margin and asset turnover ratio, which  highlights the company's deteriorating profitability and efficiency.
