@@ -1,0 +1,101 @@
+---
+title: "Individual assignment on linear regression"
+author: "LIU Yuzhu 1155091887"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r, echo=FALSE, warning = FALSE}
+library(ggplot2)
+library(gridExtra)
+```
+
+## Problem 1
+```{r, results = "hold", echo=FALSE}
+data = read.csv("C:\\Users\\admin\\Downloads\\dtStore.csv")
+data$log_sales = log(data$sales)
+data$log_Q = log(data$Q)
+cat("Summary statistic of sales before log transformation\n")
+summary(data$sales)
+cat("\nSummary statistic of sales after log transformation\n") 
+summary(data$log_sales)
+```
+
+```{r, results = "hold", echo=FALSE}
+histogram_before = ggplot(data=data, aes(x=sales)) + 
+  labs(title="Distribution before log transformation") + #hjust parameter in element_text function can move the title horizontally
+  theme(plot.title = element_text(hjust = 0.5), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+        panel.background = element_blank(), axis.line = element_line(colour = "black"), 
+        panel.border = element_rect(colour = "black", fill=NA, size=1)) +
+  geom_histogram(bins=15, col="black", alpha=0) + 
+  scale_x_continuous(name="sales", breaks=c(0:7)*0.8*(10^7), labels=waiver()) + 
+  scale_y_continuous(limits=c(0, 22))
+histogram_after = ggplot(data=data, aes(x=log_sales)) + 
+  labs(title="Distribution after log transformation") +
+  theme(plot.title = element_text(hjust = 0.5), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+        panel.background = element_blank(), axis.line = element_line(colour = "black"), 
+        panel.border = element_rect(colour = "black", fill=NA, size=1)) +
+  geom_histogram(bins=10, col="black", alpha=0) + 
+  scale_x_continuous(name="log sales") + 
+  scale_y_continuous(limits=c(0, 20))
+boxplot_before = ggplot(data=data, aes(x=sales)) + geom_boxplot() + labs(title="Boxplot before log transformation") + 
+  theme(plot.title = element_text(hjust = 0.5), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+        panel.background = element_blank(), axis.line = element_line(colour = "black"), 
+        panel.border = element_rect(colour = "black", fill=NA, size=1)) + 
+  scale_y_continuous(breaks=NULL)
+boxplot_after = ggplot(data=data, aes(x=log_sales)) + geom_boxplot() + labs(title="Boxplot after log transformation") + 
+  theme(plot.title = element_text(hjust = 0.5), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+        panel.background = element_blank(), axis.line = element_line(colour = "black"), 
+        panel.border = element_rect(colour = "black", fill=NA, size=1)) + 
+  scale_y_continuous(breaks=NULL)
+grid.arrange(histogram_before, histogram_after, boxplot_before, boxplot_after, ncol=2)
+```
+
+As shown in the above histogram chart, before log transformation, sales data is right-skewed with a long tail on the upper side of the distribution. Its mean (5583184) is much larger than its median (3961997). After log transformation, due to concaveness of logarithm function, the distribution becomes more symmetric, and its mean (15.21) is very close to its median (15.19). Furthermore, the above boxplots show that before log transformation, many outliers are more than 1.5 IQR above Q3, while after log transforamtion, the number of outliers are reduced dramatically.
+
+```{r, results = "hold", echo=FALSE}
+sales_model = lm(log_sales~log_Q, data=data)
+summary(sales_model)
+```
+
+The estimated slope coefficient is 1.0792, which means one unit increase in the logarithm of Q would result in on average 1.0792 units of increase in logarithm of sales.
+
+```{r, results = "hold", echo=FALSE}
+plot(sales_model)
+```
+
+Compared with the old sales_model, the sales_model after log transformation improves a bit in goodness of fit, indicated by the less significant curvature of the plot of residuals and fitted values. However, the normal Q-Q plot still deviates from straight line in the lower part of the data, which alarms normal assumption about residuals may not be valid.
+
+## Problem 2
+```{r, results = "hold", echo=FALSE}
+cat("Summary statistics for variable cost\n")
+summary(data$varCost)
+ggplot(data=data, aes(x=varCost)) + 
+  labs(title="Histogram for variable cost") +
+  theme(plot.title = element_text(hjust = 0.5), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+        panel.background = element_blank(), axis.line = element_line(colour = "black"), 
+        panel.border = element_rect(colour = "black", fill=NA, size=1)) +
+  geom_histogram(bins=15, col="black", alpha=0) + 
+  scale_x_continuous(name="sales", breaks=c(0:7)*0.4*(10^7), labels=waiver()) + 
+  scale_y_continuous(limits=c(0, 24))
+```
+
+The histogram of variable cost is significantly right-skewed with a long tail on the upper side. The variable's mean (3841375) is much larger than its median (2680286), which indicates more data lies below the mean rather than above the mean.
+
+```{r, results = "hold", echo=FALSE}
+plot(data$Q, data$varCost, main="Scatterplot for varible cost and quantity", xlab="Quantity", ylab="Variable cost")
+```
+
+As shown in the scatterplot, points lie roughly around a line, so there is a strong linear association between variable cost and quantity.
+
+```{r, results = "hold", echo=FALSE}
+cost_model = lm(varCost~Q, data=data)
+summary(cost_model)
+```
+
+The fitted model is varCost = -575210.4 + 10814.2 * Q + error. 
+
+Null hypothesis that population coefficient of Q is 0 is rejected since p-value < 2e-16 and is lower than 0.05, the commonly-used significance level. The slope coefficient of 10814.2 means that one unit of increase in quantity would result in on average 10814.2 units of increase in variable cost. 
+
+Multiple R-squared is 0.9904, which means more than 99% of variation in variable costs can be explained by the model. After adjusted for the number of variables in the model, the resulting adjusted R-squared is still more than 0.9, indicating high goodness of fit. P-value for F-test is lower than 2.2e-16 and 0.05, so the overall model is useful in predicting variable cost.
