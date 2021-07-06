@@ -61,15 +61,11 @@ public:
 //};
 
 int main() {
-	//	char S[10010];
 	bead* header = new bead('-');
 	bead* trailer = new bead('-');
 	header->pred = NULL; header->succ = trailer;
 	trailer->pred = header; trailer->succ = NULL;
 	char col;
-	//	scanf("%s", &*S);
-	//	int n = (int)strlen(S);
-	//	for(int i =0;i<n;i++) {C.insertAsLast(S[i]);}
 	while ((col = getchar()) != '\n') { trailer->insertAsPre(col); }
 	int M;
 	scanf("%d", &M);
