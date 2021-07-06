@@ -1,4 +1,4 @@
-// Define and use unnessary class "chain" would slow down the program a lot.
+// Defining and using unnessary class "chain" would slow down the program a lot.
 
 #define _CRT_SECURE_NO_WARNINGS
 #include <iostream>
