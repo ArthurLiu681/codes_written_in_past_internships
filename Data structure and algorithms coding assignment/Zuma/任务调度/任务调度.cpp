@@ -40,7 +40,7 @@ int main() {
 	scanf("%d %d", &n, &m);
 	task* pq = new task[n];
 	for (int i = 0; i < n; i++) {
-		scanf("%lld %s", &pq[i].p, pq[i].name);
+		scanf("%lld %s", &pq[i].p, pq[i].name); // Using "%lld" instead of "%I64d" accelerates the program a lot, making four test sets which originally exceeded time limit accepted.
 	}
 	int size = n;
 	heapify(pq, 0, size);
